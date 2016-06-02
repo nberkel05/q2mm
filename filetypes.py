@@ -219,7 +219,7 @@ class GaussLog(File):
                     weird_nel = 0
                     weird_cl = len(cols)
                     while len(cols) == weird_cl:
-                        if 'Haromic' in line:
+                        if 'Harmonic' in line:
                             break
                         if weird_hp_mode:
                             cols = cols[1:]
@@ -1631,6 +1631,8 @@ class Structure(object):
         dummies = []
         for atom in self.atoms:
             if atom.is_dummy:
+                logger.log(
+                    10,'  -- Identified {} as a dummy atom.'.format(atom))
                 dummies.append(atom.index)
         return dummies
 
@@ -1668,8 +1670,8 @@ class Atom(object):
             self.z = coords[2]
         self.props = {}
     def __repr__(self):
-        return '{}[{},{},{}]'.format(
-            self.element, self.x, self.y, self.z)
+            return '{}[{},{},{}]'.format(
+                self.atom_type_name, self.x, self.y, self.z)
     @property
     def coords(self):
         return [self.x, self.y, self.z]
@@ -1711,10 +1713,13 @@ class Atom(object):
         """
         # I think 61 is the default dummy atom type in a Schrodinger atom.typ
         # file.
-        if self.atom_type == 61 or \
-                self.atom_type_name == 'Du' or \
+        # Okay, so maybe it's not. Anyway, Tony added an atom type 205 for
+        # dummies. It'd be really great if we all used the same atom.typ file
+        # someday.
+        # Could add in a check for the atom_type number. I removed it.
+        if self.atom_type_name == 'Du' or \
                 self.element == 'X' or \
-                self.atomic_num == 0:
+                self.atomic_num == -2:
             return True
         else:
             return False
