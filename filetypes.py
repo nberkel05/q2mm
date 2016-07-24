@@ -147,33 +147,38 @@ class GaussLog(File):
         """
         Read force constant and eigenvector data from a frequency
         calculation.
-
-        This function is more or less a direct copy of someone else's
-        code (Elaine?), so I'm not sure how it works.
         """
         logger.log(5, 'READING: {}'.format(self.filename))
         self._evals = []
         self._evecs = []
         self._structures = []
-        weird_nfc = []
-        weird_nvec = []
-        weird_ne = 0
+        force_constants = []
+        evecs = []
         with open(self.path, 'r') as f:
+            # The keyword "harmonic" shows up before the section we're
+            # interested in. It can show up multiple times depending on the
+            # options in the Gaussian .com file.
             past_first_harm = False
-            weird_hp_mode = False
-            fi = iter(f)
+            # High precision mode, turned on by including "freq=hpmodes" in the
+            # Gaussian .com file.
+            hpmodes = False
+            file_iterator = iter(f)
+            # This while loop breaks when the end of the file is reached, or
+            # if the high quality modes have been read already.
             while True:
                 try:
-                    line = fi.next()
+                    line = file_iterator.next()
                 except:
+                    # End of file.
                     break
+                # Gathering some geometric information.
                 if 'orientation:' in line:
                     self._structures.append(Structure())
-                    fi.next()
-                    fi.next()
-                    fi.next()
-                    fi.next()
-                    line = fi.next()
+                    file_iterator.next()
+                    file_iterator.next()
+                    file_iterator.next()
+                    file_iterator.next()
+                    line = file_iterator.next()
                     while not '---' in line:
                         cols = line.split()
                         self._structures[-1].atoms.append(
@@ -181,145 +186,351 @@ class GaussLog(File):
                                  x=float(cols[3]),
                                  y=float(cols[4]),
                                  z=float(cols[5])))
-                        line = fi.next()
+                        line = file_iterator.next()
                     logger.log(5, '  -- Found {} atoms.'.format(
                             len(self._structures[-1].atoms)))
+
                 elif 'Harmonic' in line:
+                    # The high quality eigenvectors come before the low quality
+                    # ones. If you see "Harmonic" again, it means you're at the
+                    # low quality ones now, so break.
                     if past_first_harm:
                         break
                     else:
                         past_first_harm = True
                 elif 'Frequencies' in line:
-                    del(weird_nfc[:])
-                    del(weird_nvec[:])
+                    # We're going to keep reusing these.
+                    # We accumulate sets of eigevectors and eigenvalues, add
+                    # them to self._evecs and self._evals, and then reuse this
+                    # for the next set.
+                    del(force_constants[:])
+                    del(evecs[:])
+                    # Values inside line look like:
+                    #     "Frequencies --- xxxx.xxxx xxxx.xxxx"
+                    # That's why we remove the 1st two columns. This is
+                    # consistent with and without "hpmodes".
+                    # For "hpmodes" option, there are 5 of these frequencies.
+                    # Without "hpmodes", there are 3.
+                    # Thus the eigenvectors and eigenvalues will come in sets of
+                    # either 5 or 3.
                     cols = line.split()
-                    cols = cols[2:]
-                    for freq in map(float, cols):
-                        if freq < 0.:
-                            weird_nfc.append(-1.)
+                    for frequency in map(float, cols[2:]):
+                        # Has 1. or -1. depending on the sign of the frequency.
+                        if frequency < 0.:
+                            force_constants.append(-1.)
                         else:
-                            weird_nfc.append(1.)
-                        weird_nvec.append([])
-                        weird_ne += 1
-                    line = fi.next()
+                            force_constants.append(1.)
+                        # For now this is empty, but we will add to it soon.
+                        evecs.append([])
+
+                    # Moving on to the reduced masses.
+                    line = file_iterator.next()
                     cols = line.split()
-                    for i in  range(len(weird_nfc)):
-                        weird_nfc[i] = weird_nfc[i] / float(cols[i+3])
-                    line = fi.next()
+                    # Again, trim the "Reduced masses ---".
+                    # It's "Red. masses --" for without "hpmodes".
+                    for i, mass in enumerate(map(float, cols[3:])):
+                        # +/- 1 / reduced mass
+                        force_constants[i] = force_constants[i] / mass
+
+                    # Now we are on the line with the force constants.
+                    line = file_iterator.next()
                     cols = line.split()
-                    for i in range(len(weird_nfc)):
-                        weird_nfc[i] *= float(cols[i+3]) / co.AU_TO_MDYNA
-                    fi.next()
-                    line = fi.next()
+                    # Trim "Force constants ---". It's "Frc consts --" without
+                    # "hpmodes".
+                    for i, force_constant in enumerate(map(float, cols[3:])):
+                        # co.AU_TO_MDYNA = 15.569141
+                        force_constants[i] *= force_constant / co.AU_TO_MDYNA
+
+                    # Force constants were calculated above as follows:
+                    #    a = +/- 1 depending on the sign of the frequency
+                    #    b = a / reduced mass (obtained from the Gaussian log)
+                    #    c = b * force constant / conversion factor (force
+                    #         (constant obtained from Gaussian log) (conversion
+                    #         factor is inside constants module)
+
+                    # Skip the IR intensities.
+                    file_iterator.next()
+                    # This is different depending on whether you use "hpmodes".
+                    line = file_iterator.next()
+                    # "Coord" seems to only appear when the "hpmodes" is used.
                     if 'Coord' in line:
-                        weird_hp_mode = True
-                    line = fi.next()
+                        hpmodes = True
+                    # This is different depending on whether you use
+                    # "freq=projected".
+                    line = file_iterator.next()
+                    # The "projected" keyword seems to add "IRC Coupling".
+                    if 'IRC Coupling' in line:
+                        line = file_iterator.next()
+
+                    # We're on to the eigenvectors.
+                    # Until the end of this section containing the eigenvectors,
+                    # the number of columns remains constant. When that changes,
+                    # we know we're to the next set of frequencies, force
+                    # constants and eigenvectors.
                     cols = line.split()
-                    weird_nel = 0
-                    weird_cl = len(cols)
-                    while len(cols) == weird_cl:
-                        if 'Haromic' in line:
+                    cols_len = len(cols)
+
+                    while len(cols) == cols_len:
+                        # This will come after all the eigenvectors have been
+                        # read. We can break out then.
+                        if 'Harmonic' in line:
                             break
-                        if weird_hp_mode:
+                        # If "hpmodes" is used, you have an extra column here
+                        # that is simply an index.
+                        if hpmodes:
                             cols = cols[1:]
-                            weird_nel += 1
-                        else:
-                            weird_nel += 3
-                        weird_m = np.sqrt(co.MASSES.items()[int(cols[1]) - 1][1])
+                        # cols corresponds to line(s) (maybe only 1st line)
+                        # under section "Coord Atom Element:" (at least for
+                        # "hpmodes").
+
+                        # Just the square root of the mass from co.MASSES.
+                        # co.MASSES currently has the average mass.
+                        # Gaussian may use the mass of the most abundant
+                        # isotope. This may be a problem.
+                        mass_sqrt = np.sqrt(co.MASSES.items()[int(cols[1]) - 1][1])
+
                         cols = cols[2:]
-                        for i in range(len(weird_nvec)):
-                            if weird_hp_mode:
-                                weird_a = cols.pop(0)
-                                weird_nvec[i].append(float(weird_a) * weird_m)
+                        # This corresponds to the same line still, but without
+                        # the atom elements.
+
+                        # This loop expands the LoL, evecs, as so.
+                        # Iteration 1:
+                        # [[x], [x], [x], [x], [x]]
+                        # Iteration 2:
+                        # [[x, x], [x, x], [x, x], [x, x], [x, x]]
+                        # ... etc. until the length of the sublist is equal to
+                        # the number of atoms. Remember, for low precision
+                        # eigenvectors it only adds in sets of 3, not 5.
+                        
+                        # Elements of evecs are simply the data under
+                        # "Coord Atom Element" multiplied by the square root
+                        # of the weight.
+                        for i in range(len(evecs)):
+                            if hpmodes:
+                                # evecs is a LoL. Length of sublist is
+                                # equal to # of columns in section "Coord Atom
+                                # Element" minus 3, for the 1st 3 columns
+                                # (index, atom index, atomic number).
+                                evecs[i].append(float(cols[i]) * mass_sqrt)
                             else:
-                                for j in range(3):
-                                    weird_a = cols.pop(0)
-                                    weird_nvec[i].append(float(weird_a) * weird_m)
-                        line = fi.next()
+                                # This is fow low precision eigenvectors. It's a
+                                # funny way to go in sets of 3. Take a look at
+                                # your low precision Gaussian log and it will
+                                # make more sense.
+                                for useless in range(3):
+                                    x = float(cols.pop(0))
+                                    evecs[i].append(x * mass_sqrt)
+                        line = file_iterator.next()
                         cols = line.split()
-                    for i in range(len(weird_nvec)):
-                        self._evals.append(weird_nfc[i])
-                        self._evecs.append(weird_nvec[i])
+
+                    # Here the overall number of eigenvalues and eigenvectors is
+                    # increased by 5 (high precision) or 3 (low precision). The
+                    # total number goes to 3N - 6 for non-linear and 3N - 5 for
+                    # linear. Same goes for self._evecs.
+                    for i in range(len(evecs)):
+                        self._evals.append(force_constants[i])
+                        self._evecs.append(evecs[i])
+                    # We know we're done if this is in the line.
                     if 'Harmonic' in line:
                         break
         for evec in self._evecs:
-            weird_ss = 0.
-            for weird_x in evec:
-                weird_ss += weird_x * weird_x
-            weird_x = 1 / np.sqrt(weird_ss)
+            # Each evec is a single eigenvector.
+            # Add up the sum of squares over an eigenvector.
+            sum_of_squares = 0.
+            # Appropriately named, element is an element of that single
+            # eigenvector.
+            for element in evec:
+                sum_of_squares += element * element
+            # Now x is the inverse of the square root of the sum of squares
+            # for an individual eigenvector.
+            element = 1 / np.sqrt(sum_of_squares)
             for i in range(len(evec)):
-                evec[i] *= weird_x
+                evec[i] *= element
+
         self._evals = np.array(self._evals)
         self._evecs = np.array(self._evecs)
+        logger.log(1, '>>> self._evals: {}'.format(self._evals))
+        logger.log(1, '>>> self._evecs: {}'.format(self._evecs))
+        logger.log(5, '  -- {} structures found.'.format(len(self.structures)))
+    # May want to move some attributes assigned to the structure class onto
+    # this filetype class.
     def read_archive(self):
         """
         Only reads last archive found in the Gaussian .log file.
         """
         logger.log(5, 'READING: {}'.format(self.filename))
         struct = Structure()
-        # Some more manual trimming.
-        # lines = open(self.path, 'r').readlines()
-        # for i, line in enumerate(lines):
-        #     if '1\\1\\' in line:
-        #         last_arch_start = i
-        # lines = ''.join(lines[last_arch_start:])
-        # arch = re.findall(
-        #     '(\s1\\\\1\\\\(?s).*?[\\\\]+@)', 
-        #     lines)[0]
+        self._structures = [struct]
+        # Matches everything in between the start and end.
+        # (?s)  - Flag for re.compile which says that . matches all.
+        # \\\\  - One single \
+        # Start - " 1\1\".
+        # End   - Some number of \ followed by @. Not sure how many \ there
+        #         are, so this matches as many as possible. Also, this could
+        #         get separated by a line break (which would also include
+        #         adding in a space since that's how Gaussian starts new lines
+        #         in the archive).
+        # We pull out the last one [-1] in case there are multiple archives
+        # in a file.
         arch = re.findall(
-            '(\s1\\\\1\\\\(?s).*?[\\\\]+@)', 
+            '(?s)(\s1\\\\1\\\\.*?[\\\\\n\s]+@)', 
             open(self.path, 'r').read())[-1]
         logger.log(5, '  -- Located last archive.')
+        # Make it into one string.
         arch = arch.replace('\n ', '')
-        # Watch out with NImag. Sometimes equals 1, sometimes 0,
-        # anything else?
+        # Separate it by Gaussian's section divider.
+        arch = arch.split('\\\\')
+        # Helps us iterate over sections of the archive.
+        section_counter = 0
+        # SECTION 0
+        # General job information.
+        arch_general = arch[section_counter]
+        section_counter += 1
         stuff = re.search(
             '\s1\\\\1\\\\.*?\\\\.*?\\\\.*?\\\\.*?\\\\.*?\\\\(?P<user>.*?)'
             '\\\\(?P<date>.*?)'
-            '\\\\.*?\\\\\\\\(?P<com>.*?)'
-            '\\\\\\\\(?P<filename>.*?)'
-            '\\\\\\\\(?P<charge>.*?)'
+            '\\\\.*?',
+            arch_general)
+        struct.props['user'] = stuff.group('user')
+        struct.props['date'] = stuff.group('date')
+        # SECTION 1
+        # The commands you wrote.
+        arch_commands = arch[section_counter]
+        section_counter += 1
+        # SECTION 2
+        # The comment line.
+        arch_comment = arch[section_counter]
+        section_counter += 1
+        # SECTION 3
+        # Actually has charge, multiplicity and coords.
+        arch_coords = arch[section_counter]
+        section_counter +=1
+        stuff = re.search(
+            '(?P<charge>.*?)'
             ',(?P<multiplicity>.*?)'
-            '\\\\(?P<atoms>.*?)'
-            '\\\\\\\\.*?HF=(?P<hf>.*?)'
-            '\\\\.*?ZeroPoint=(?P<zp>.*?)'
-            '\\\\.*?Thermal=(?P<thermal>.*?)'
-            '\\\\.*?\\\\NImag=[10]\\\\\\\\(?P<hess>.*?)'
-            '\\\\\\\\(?P<evals>.*?)'
-            '\\\\\\\\\\\\',
-            arch)
-        logger.log(5, '  -- Read archive.')
+            '\\\\(?P<atoms>.*)',
+            arch_coords)
+        struct.props['charge'] = stuff.group('charge')
+        struct.props['multiplicity'] = stuff.group('multiplicity')
+        # We want to do more fancy stuff with the atoms than simply add to
+        # the properties dictionary.
         atoms = stuff.group('atoms')
         atoms = atoms.split('\\')
+        # Z-matrix coordinates adds another section. We need to be aware of 
+        # this.
+        probably_z_matrix = False
         for atom in atoms:
-            ele, x, y, z = atom.split(',')
+            stuff = atom.split(',')
+            # An atom typically looks like this:
+            #    C,0.1135,0.13135,0.63463
+            if len(stuff) == 4:
+                ele, x, y, z = stuff
+            # But sometimes they look like this (notice the extra zero):
+            #    C,0,0.1135,0.13135,0.63463
+            # I'm not sure what that extra zero is for. Anyway, ignore
+            # that extra whatever if it's there.
+            elif len(stuff) == 5:
+                ele, x, y, z = stuff[0], stuff[2], stuff[3], stuff[4]
+            # And this would be really bad. Haven't seen anything else like
+            # this yet.
+            # 160613 - So, not sure when I wrote that comment, but something
+            # like this definitely happens when using scans and z-matrices.
+            # I'm going to ignore grabbing any atoms in this case.
+            else:
+                logger.warning(
+                    'Not sure how to read coordinates from Gaussian acrhive!')
+                probably_z_matrix = True
+                section_counter += 1
+                # Let's have it stop looping over atoms, but not fail anymore.
+                break
+                # raise Exception(
+                #     'Not sure how to read coordinates from Gaussian archive!')
             struct.atoms.append(
                 Atom(element=ele, x=float(x), y=float(y), z=float(z)))
-        logger.log(5, '  -- Read {} atoms.'.format(len(atoms)))
-        self._structures = [struct]
-        hess_tri = stuff.group('hess')
-        hess_tri = hess_tri.split(',')
-        logger.log(
-            5,
-            '  -- Read {} Hessian elements in lower triangular '
-            'form.'.format(len(hess_tri)))
-        hess = np.zeros([len(atoms) * 3, len(atoms) * 3], dtype=float)
-        logger.log(
-            5, '  -- Created {} Hessian matrix.'.format(hess.shape))
-        # Code for if it was in upper triangle, but it's not.
-        # hess[np.triu_indices_from(hess)] = hess_tri
-        # hess += np.triu(hess, -1).T
-        # Lower triangle code.
-        hess[np.tril_indices_from(hess)] = hess_tri
-        hess += np.tril(hess, -1).T
-        hess *= co.HESSIAN_CONVERSION
-        struct.hess = hess
+        logger.log(20, '  -- Read {} atoms.'.format(len(struct.atoms)))
+        # SECTION 4
+        # All sorts of information here. This area looks like:
+        #     prop1=value1\prop2=value2\prop3=value3
+        arch_info = arch[section_counter]
+        section_counter += 1
+        arch_info = arch_info.split('\\')
+        for thing in arch_info:
+            prop_name, prop_value = thing.split('=')
+            struct.props[prop_name] = prop_value
+        # SECTION 5
+        # The Hessian. Only exists if you did a frequency calculation.
+        # Appears in lower triangular form.
+        if not arch[section_counter] == '@':
+            hess_tri = arch[section_counter]
+            hess_tri = hess_tri.split(',')
+            logger.log(
+                5,
+                '  -- Read {} Hessian elements in lower triangular '
+                'form.'.format(len(hess_tri)))
+            hess = np.zeros([len(atoms) * 3, len(atoms) * 3], dtype=float)
+            logger.log(
+                5, '  -- Created {} Hessian matrix.'.format(hess.shape))
+            # Code for if it was in upper triangle (it's not).
+            # hess[np.triu_indices_from(hess)] = hess_tri
+            # hess += np.triu(hess, -1).T
+            # Lower triangle code.
+            hess[np.tril_indices_from(hess)] = hess_tri
+            hess += np.tril(hess, -1).T
+            hess *= co.HESSIAN_CONVERSION
+            struct.hess = hess
+            # SECTION 6
+            # Not sure what this is.
 
-        # Code to extract energies.
-        # Still not sure exactly what energies we want to use.
-        struct.props['hf'] = float(stuff.group('hf'))
-        struct.props['zp'] = float(stuff.group('zp'))
-        struct.props['thermal'] = float(stuff.group('thermal'))
+        # stuff = re.search(
+        #     '\s1\\\\1\\\\.*?\\\\.*?\\\\.*?\\\\.*?\\\\.*?\\\\(?P<user>.*?)'
+        #     '\\\\(?P<date>.*?)'
+        #     '\\\\.*?\\\\\\\\(?P<com>.*?)'
+        #     '\\\\\\\\(?P<filename>.*?)'
+        #     '\\\\\\\\(?P<charge>.*?)'
+        #     ',(?P<multiplicity>.*?)'
+        #     '\\\\(?P<atoms>.*?)'
+        #     # This marks the end of what always shows up.
+        #     '\\\\\\\\'
+        #     # This stuff sometimes shows up.
+        #     # And it breaks if it doesn't show up.
+        #     '.*?HF=(?P<hf>.*?)'
+        #     '\\\\.*?ZeroPoint=(?P<zp>.*?)'
+        #     '\\\\.*?Thermal=(?P<thermal>.*?)'
+        #     '\\\\.*?\\\\NImag=\d+\\\\\\\\(?P<hess>.*?)'
+        #     '\\\\\\\\(?P<evals>.*?)'
+        #     '\\\\\\\\\\\\',
+        #     arch)
+        # logger.log(5, '  -- Read archive.')
+        # atoms = stuff.group('atoms')
+        # atoms = atoms.split('\\')
+        # for atom in atoms:
+        #     ele, x, y, z = atom.split(',')
+        #     struct.atoms.append(
+        #         Atom(element=ele, x=float(x), y=float(y), z=float(z)))
+        # logger.log(5, '  -- Read {} atoms.'.format(len(atoms)))
+        # self._structures = [struct]
+        # hess_tri = stuff.group('hess')
+        # hess_tri = hess_tri.split(',')
+        # logger.log(
+        #     5,
+        #     '  -- Read {} Hessian elements in lower triangular '
+        #     'form.'.format(len(hess_tri)))
+        # hess = np.zeros([len(atoms) * 3, len(atoms) * 3], dtype=float)
+        # logger.log(
+        #     5, '  -- Created {} Hessian matrix.'.format(hess.shape))
+        # # Code for if it was in upper triangle, but it's not.
+        # # hess[np.triu_indices_from(hess)] = hess_tri
+        # # hess += np.triu(hess, -1).T
+        # # Lower triangle code.
+        # hess[np.tril_indices_from(hess)] = hess_tri
+        # hess += np.tril(hess, -1).T
+        # hess *= co.HESSIAN_CONVERSION
+        # struct.hess = hess
+        # # Code to extract energies.
+        # # Still not sure exactly what energies we want to use.
+        # struct.props['hf'] = float(stuff.group('hf'))
+        # struct.props['zp'] = float(stuff.group('zp'))
+        # struct.props['thermal'] = float(stuff.group('thermal'))
     def get_most_converged(self, structures=None):
         """
         Used with geometry optimizations that don't succeed. Sometimes
@@ -619,6 +830,34 @@ class GaussLog(File):
                                        'section.'.format(i+1))
         return structures
                             
+def conv_sch_str(sch_struct):
+    """
+    Converts a schrodinger.structure object to my own structure object.
+    Sort of pointless. Probably remove soon.
+    """
+    my_struct = Structure()
+    my_struct.props.update(sch_struct.property)
+    for sch_atom in sch_struct.atom:
+        my_atom = Atom()
+        my_struct.atoms.append(my_atom)
+        my_atom.atom_type = sch_atom.atom_type
+        my_atom.atom_type_name = sch_atom.atom_type_name
+        my_atom.atomic_num = sch_atom.atomic_number
+        my_atom.bonded_atom_indices = \
+            [x.index for x in sch_atom.bonded_atoms]
+        my_atom.element = sch_atom.element
+        my_atom.index = sch_atom.index
+        my_atom.partial_charge = sch_atom.partial_charge
+        my_atom.x, my_atom.y, my_atom.z = sch_atom.x, sch_atom.y, sch_atom.z
+        my_atom.props.update(sch_atom.property)
+    for sch_bond in sch_struct.bond:
+        my_bond = Bond()
+        my_struct.bonds.append(my_bond)
+        my_bond.atom_nums = [sch_bond.atom1, sch_bond.atom2]
+        my_bond.order = sch_bond.order
+        my_bond.value = sch_bond.length
+    return my_struct
+    
 class SchrodingerFile(File):
     """
     Parent class used for all Schrodinger files.
@@ -663,6 +902,11 @@ class JaguarIn(SchrodingerFile):
         self._lines = None
     @property
     def hessian(self):
+        """
+        Reads the Hessian from a Jaguar .in.
+
+        Automatically removes Hessian elements corresponding to dummy atoms.
+        """
         if self._hessian is None:
             num = len(self.structures[0].atoms) + len(self._empty_atoms)
             logger.log(5,
@@ -705,7 +949,6 @@ class JaguarIn(SchrodingerFile):
                 dummy_indices.append(index + 2)
             logger.log(1, '>>> dummy_indices: {}'.format(dummy_indices))
             # Delete these rows and columns.
-            np.set_printoptions(linewidth=100000)
             logger.log(1, '>>> hessian.shape: {}'.format(hessian.shape))
             logger.log(1, '>>> hessian:\n{}'.format(hessian))
             hessian = np.delete(hessian, dummy_indices, 0)
@@ -967,12 +1210,12 @@ class Mae(SchrodingerFile):
             'tors': False}
         if len(self.structures) > 1:
             com_opts['strs'] = True
-        if any(x in ['ja', 'jb', 'jt'] for x in self.commands):
+        if any(x in ['jb', 'ja', 'jt'] for x in self.commands):
             com_opts['sp_mmo'] = True
-        if any(x in ['me', 'mea', 'mq', 'mqh'] for x in self.commands):
+        if any(x in ['me', 'mea', 'mq', 'mqh', 'mqa'] for x in self.commands):
             com_opts['sp'] = True
         # Command meig is depreciated.
-        if any(x in ['meig', 'mjeig', 'mgeig', 'mh'] for x in self.commands):
+        if any(x in ['mh', 'meig', 'mjeig', 'mgeig'] for x in self.commands):
             if com_opts['strs']:
                 raise Exception(
                     "Can't obtain the Hessian from a Maestro file "
@@ -982,10 +1225,10 @@ class Mae(SchrodingerFile):
                         self.path, ' '.join(commands)))
             else:
                 com_opts['freq'] = True
-        if any(x in ['ma', 'mb', 'meo', 'meao', 'mt'] for x in self.commands):
+        if any(x in ['mb', 'ma', 'mt', 'meo', 'meao'] for x in self.commands):
             com_opts['opt'] = True
             com_opts['opt_mmo'] = True
-        elif any(x in ['ma', 'mb', 'mt'] for x in self.commands):
+        elif any(x in ['mb', 'ma', 'mt'] for x in self.commands):
             com_opts['opt'] = True
         if any(x in ['mt', 'jt'] for x in self.commands):
             com_opts['tors'] = True
@@ -1088,7 +1331,7 @@ class Mae(SchrodingerFile):
             logger.log(5, 'WROTE: {}'.format(
                     os.path.join(self.name_com)))
 
-    def run(self, max_timeout=None, timeout=10, check_tokens=True):
+    def run(self, max_fails=5, max_timeout=None, timeout=10, check_tokens=True):
         """
         Runs MacroModel .com files. This has to be more complicated than a
         simple subprocess command due to problems with Schrodinger tokens.
@@ -1100,6 +1343,8 @@ class Mae(SchrodingerFile):
         max_timeout : int
                       Maximum number of attempts to look for Schrodinger
                       license tokens before giving up.
+        max_fails : int
+                    Maximum number of times the job can fail.
         timeout : float
                   Time waited in between lookups of Schrodinger license
                   tokens.
@@ -1107,6 +1352,7 @@ class Mae(SchrodingerFile):
         current_directory = os.getcwd()
         os.chdir(self.directory)
         current_timeout = 0
+        current_fails = 0
         licenses_available = False
         if check_tokens is True:
             logger.log(5, "  -- Checking Schrodinger tokens.")
@@ -1122,7 +1368,8 @@ class Mae(SchrodingerFile):
                     raise Exception(
                         'The command "$SCHRODINGER/utilities/licutil '
                         '-available" is not working with the current '
-                        'regex in calculate.py.')
+                        'regex in calculate.py.\nOUTPUT:\n{}'.format(
+                            token_string))
                 suite_tokens = int(suite_tokens.group(1))
                 macro_tokens = int(macro_tokens.group(1))
                 if suite_tokens > co.MIN_SUITE_TOKENS and \
@@ -1146,10 +1393,22 @@ class Mae(SchrodingerFile):
         else:
             licenses_available = True
         if licenses_available:
-            logger.log(5, 'RUNNING: {}'.format(self.name_com))
-            sp.check_output(
-                'bmin -WAIT {}'.format(
+            while True:
+                try:
+                    logger.log(5, 'RUNNING: {}'.format(self.name_com))
+                    sp.check_output(
+                        'bmin -WAIT {}'.format(
                             os.path.splitext(self.name_com)[0]), shell=True)
+                    break
+                except sp.CalledProcessError:
+                    logger.warning('Call to MacroModel failed and I have no '
+                                   'idea why!')
+                    current_fails += 1
+                    if current_fails < max_fails:
+                        time.sleep(timeout)
+                        continue
+                    else:
+                        raise
         os.chdir(current_directory)
 
 def pretty_timeout(current_timeout, macro_tokens, suite_tokens, end=False,
@@ -1379,6 +1638,7 @@ def select_structures(structures, indices, label):
                 selected.append((str_num, struct))
         return selected
 
+# This could use some documentation. Looks pretty though.
 def geo_from_points(*args):
     x1 = args[0][0]
     y1 = args[0][1]
@@ -1434,7 +1694,7 @@ class Structure(object):
         Returns atomic coordinates as a list of lists.
         """
         return [atom.coords for atom in self.atoms]
-    def format_coords(self, format='latex'):
+    def format_coords(self, format='latex', indices_use_charge=None):
         """
         Returns a list of strings/lines to easily generate coordinates
         in various formats.
@@ -1466,15 +1726,53 @@ class Structure(object):
                     ele = co.MASSES.items()[atom.atomic_num - 1][0]
                 else:
                     ele = atom.element
-                output.append(' {0:<8s}{1:>16.6f}{2:>16.6f}{3:>16.6f}'.format(
-                        ele, atom.x, atom.y, atom.z))
+                # Used only for a problem Eric experienced.
+                # if ele == '': ele = 'Pd'
+                if indices_use_charge:
+                    if atom.index in indices_use_charge:
+                        output.append(
+                            ' {0:s}--{1:.5f}{2:>16.6f}{3:16.6f}'
+                            '{4:16.6f}'.format(
+                                ele, atom.partial_charge, atom.x,
+                                atom.y, atom.z))
+                    else:
+                        output.append(' {0:<8s}{1:>16.6f}{2:>16.6f}{3:>16.6f}'.format(
+                                ele, atom.x, atom.y, atom.z))
+                else:
+                    output.append(' {0:<8s}{1:>16.6f}{2:>16.6f}{3:>16.6f}'.format(
+                            ele, atom.x, atom.y, atom.z))
             return output
-    def select_stuff(self, typ, com_match=None, **kwargs):
+        # Formatted for Jaguar.
+        elif format == 'jaguar':
+            output = []
+            for i, atom in enumerate(self.atoms):
+                if atom.element is None:
+                    ele = co.MASSES.items()[atom.atomic_num - 1][0]
+                else:
+                    ele = atom.element
+                # Used only for a problem Eric experienced.
+                # if ele == '': ele = 'Pd'
+                label = '{}{}'.format(ele, atom.index)
+                output.append(' {0:<8s}{1:>16.6f}{2:>16.6f}{3:>16.6f}'.format(
+                        label, atom.x, atom.y, atom.z))
+            return output
+    def select_stuff(self, typ, com_match=None):
+        """
+        A much simpler version of select_data. It would be nice if select_data
+        was a wrapper around this function.
+        """
+        stuff = []
+        for thing in getattr(self, typ):
+            if (com_match and any(x in thing.comment for x in com_match)) or \
+                    com_match is None:
+                stuff.append(thing)
+        return stuff
+    def select_data(self, typ, com_match=None, **kwargs):
         """
         Selects bonds, angles, or torsions from the structure and returns them
         in the format used as data.
 
-        typ       - 'bond', 'angle', or 'torsion'.
+        typ       - 'bonds', 'angles', or 'torsions'.
         com_match - String or None. If None, just returns all of the selected
                     stuff (bonds, angles, or torsions). If a string, selects
                     only those that have this string in their comment.
@@ -1503,11 +1801,29 @@ class Structure(object):
                         if set(angle.atom_nums) == set(angle_atoms_2):
                             angle_2 = angle.value
                             break
-                    logger.log(1, '>>> atom_nums: {}'.format(atom_nums))
-                    logger.log(1, '>>> angle_1: {} / angle_2: {}'.format(angle_1, angle_2))
+                    try:
+                        logger.log(1, '>>> atom_nums: {}'.format(atom_nums))
+                        logger.log(1, '>>> angle_1: {} / angle_2: {}'.format(
+                                angle_1, angle_2))
+                    except UnboundLocalError:
+                        logger.error('>>> atom_nums: {}'.format(atom_nums))
+                        logger.error(
+                            '>>> angle_atoms_1: {}'.format(angle_atoms_1))
+                        logger.error(
+                            '>>> angle_atoms_2: {}'.format(angle_atoms_2))
+                        if 'angle_1' not in locals():
+                            logger.error("Can't identify angle_1!")
+                        else:
+                            logger.error(">>> angle_1: {}".format(angle_1))
+                        if 'angle_2' not in locals():
+                            logger.error("Can't identify angle_2!")
+                        else:
+                            logger.error(">>> angle_2: {}".format(angle_2))
+                        raise
                     if -5. < angle_1 < 5. or 175. < angle_1 < 185. or \
                             -5. < angle_2 < 5. or 175. < angle_2 < 185.:
-                        logger.log(1, '>>> angle_1 or angle_2 is too close to 0 or 180!')
+                        logger.log(
+                            1, '>>> angle_1 or angle_2 is too close to 0 or 180!')
                         pass
                     else:
                         data.append(datum)
@@ -1542,6 +1858,37 @@ class Structure(object):
                         aliph_hyds.append(atom)
         logger.log(5, '  -- {} aliphatic hydrogen(s).'.format(len(aliph_hyds)))
         return aliph_hyds
+    def get_hyds(self):
+        """
+        Returns the atom numbers of any default MacroModel type hydrogens.
+
+        This should be subclassed into something is MM3* specific.
+        """
+        hyds = []
+        for atom in self.atoms:
+            if 40 < atom.atom_type < 49:
+                for bonded_atom_index in atom.bonded_atom_indices:
+                    bonded_atom = self.atoms[bonded_atom_index - 1]
+                    if bonded_atom.atom_type == 3:
+                        hyds.append(atom)
+        logger.log(5, '  -- {} hydrogen(s).'.format(len(hyds)))
+        return hyds
+    def get_dummy_atom_indices(self):
+        """
+        Returns a list of integers where each integer corresponds to an atom
+        that is a dummy atom.
+
+        Returns
+        -------
+        list of integers
+        """
+        dummies = []
+        for atom in self.atoms:
+            if atom.is_dummy:
+                logger.log(
+                    10,'  -- Identified {} as a dummy atom.'.format(atom))
+                dummies.append(atom.index)
+        return dummies
 
 class Atom(object):
     """
@@ -1577,8 +1924,8 @@ class Atom(object):
             self.z = coords[2]
         self.props = {}
     def __repr__(self):
-        return '{}[{},{},{}]'.format(
-            self.element, self.x, self.y, self.z)
+            return '{}[{},{},{}]'.format(
+                self.atom_type_name, self.x, self.y, self.z)
     @property
     def coords(self):
         return [self.x, self.y, self.z]
@@ -1607,11 +1954,26 @@ class Atom(object):
     def exact_mass(self, value):
         self._exact_mass = value
     # I have no idea if these atom types are actually correct.
+    # Really, the user should specify custom atom types, such as dummies, in a
+    # configuration file somewhere.
     @property
     def is_dummy(self):
-        if self.atom_type in [61] or \
-                self.atom_type_name in ['Du'] or \
-                self.element in ['X']:
+        """
+        Return True if self is a dummy atom, else return False.
+
+        Returns
+        -------
+        bool
+        """
+        # I think 61 is the default dummy atom type in a Schrodinger atom.typ
+        # file.
+        # Okay, so maybe it's not. Anyway, Tony added an atom type 205 for
+        # dummies. It'd be really great if we all used the same atom.typ file
+        # someday.
+        # Could add in a check for the atom_type number. I removed it.
+        if self.atom_type_name == 'Du' or \
+                self.element == 'X' or \
+                self.atomic_num == -2:
             return True
         else:
             return False

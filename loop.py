@@ -3,15 +3,17 @@ import glob
 import itertools
 import logging
 import logging.config
+import numpy as np
 import os
 import random
 import sys
 
 import calculate
-import constants as co
 import compare
+import constants as co
 import datatypes
 import gradient
+import opt
 import parameters
 import simplex
 
@@ -29,8 +31,25 @@ class Loop(object):
         self.loop_lines = None
         self.ref_data = None
     def opt_loop(self):
+        """
+        Iterator for cycling through optimization methods.
+
+        Will continue to run the loop optimization methods until the convergence
+        criterion has been met.
+
+        Updates the user with logs on the optimization score changes. Backs up
+        the FF after each loop cycle.
+        """
         change = None
         last_score = None
+        # This additional check ensures that the code won't crash if the user
+        # forgets to add a COMP command in the loop input file.
+        if self.ff.score is None:
+            logger.warning(
+                '  -- No existing FF score! Please ensure use of COMP in the '
+                'input file! Calculating FF score automatically to compensate.')
+            self.ff.score = compare.compare_data(
+                self.ref_data, self.ff.data)
         while last_score is None \
                 or change is None \
                 or change > self.convergence:
@@ -38,9 +57,13 @@ class Loop(object):
             last_score = self.ff.score
             self.ff = self.run_loop_input(
                 self.loop_lines, score=self.ff.score)
+            logger.log(1, '>>> last_score: {}'.format(last_score))
+            logger.log(1, '>>> self.ff.score: {}'.format(self.ff.score))
             change = (last_score - self.ff.score) / last_score
             pretty_loop_summary(
                 self.cycle_num, self.ff.score, change)
+            # MM3* specific. Will have to be changed soon to allow for expansion
+            # into other FF software packages.
             mm3_files = glob.glob(os.path.join(self.direc, 'mm3_???.fld'))
             if mm3_files:
                 mm3_files.sort()
@@ -49,7 +72,6 @@ class Loop(object):
                 most_recent_num = most_recent_mm3_file[4:7]
                 num = int(most_recent_num) + 1
                 mm3_file = 'mm3_{:03d}.fld'.format(num)
-                self.ff.export_ff(path=mm3_file)
             else:
                 mm3_file = 'mm3_001.fld'
             mm3_file = os.path.join(self.direc, mm3_file)
@@ -111,7 +133,7 @@ class Loop(object):
                     20, '~~ CALCULATING REFERENCE DATA ~~'.rjust(79, '~'))
                 if len(cols) > 1:
                     self.args_ref = ' '.join(cols[1:]).split()
-                self.ref_data = calculate.main(self.args_ref)
+                self.ref_data = opt.return_ref_data(self.args_ref)
             if cols[0] == 'CDAT':
                 logger.log(
                     20, '~~ CALCULATING FF DATA ~~'.rjust(79, '~'))
@@ -126,6 +148,10 @@ class Loop(object):
                         self.ref_data,
                         self.ff.data,
                         os.path.join(self.direc, cols[cols.index('-o') + 1]))
+                if '-p' in cols:
+                    compare.pretty_data_comp(
+                        self.ref_data,
+                        self.ff.data)
             if cols[0] == 'GRAD':
                 grad = gradient.Gradient(
                     direc=self.direc,
@@ -140,6 +166,9 @@ class Loop(object):
                     ff_lines=self.ff.lines,
                     args_ff=self.args_ff)
                 self.ff = simp.run(r_data=self.ref_data)
+            if cols[0] == 'WGHT':
+                data_type = cols[1]
+                co.WEIGHTS[data_type] = float(cols[2])
         
 def read_loop_input(filename):
     with open(filename, 'r') as f:

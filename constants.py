@@ -4,8 +4,8 @@ Constants and variables used throughout Q2MM.
 import re
 from collections import OrderedDict
 
-# GENERAL SETTINGS
-SETTINGS = {'use_sqlite3': True}
+GAUSSIAN_ENERGIES = ['HF', 'ZeroPoint']
+# GAUSSIAN_ENERGIES = ['HF']
 
 # LOGGING SETTINGS
 # Settings loaded using logging.config.
@@ -21,15 +21,15 @@ LOG_SETTINGS = {
         },
     'handlers': {
         'console': {
-            # 'class': 'logging.StreamHandler', 'formatter': 'bare',
-            # 'level': 'NOTSET'},
-            'class': 'logging.StreamHandler', 'formatter': 'basic',
+            'class': 'logging.StreamHandler', 'formatter': 'bare',
             'level': 'NOTSET'},
+            # 'class': 'logging.StreamHandler', 'formatter': 'basic',
+            # 'level': 'NOTSET'},
         'root_file_handler': {
-            # 'class': 'logging.FileHandler', 'filename': 'root.log',
-            # 'formatter': 'bare', 'level': 'NOTSET'}
             'class': 'logging.FileHandler', 'filename': 'root.log',
-            'formatter': 'basic', 'level': 'NOTSET'}
+            'formatter': 'bare', 'level': 'NOTSET'}
+            # 'class': 'logging.FileHandler', 'filename': 'root.log',
+            # 'formatter': 'basic', 'level': 'NOTSET'}
         },
     'loggers': {'__main__': {'level': 5, 'propagate': True},
                 'calculate': {'level': 20, 'propagate': True},
@@ -74,29 +74,32 @@ LOG_SETTINGS = {
 # quotes), the new parameter value will be decremented or incremented by a
 # percentage of its current value.
 #     x_new = x +/- (x * step)
-STEPS = {'ae':      2.0,
-         'af':      0.2,
-         'be':      0.1,
-         'bf':      0.2,
-         'df':      0.2,
+STEPS = {'ae':      1.0,
+         'af':      0.1,
+         'be':      0.02,
+         'bf':      0.1,
+         'df':      0.1,
          'imp1':    0.2,
          'imp2':    0.2,
          'sb':      0.2,
-         'q':       0.5
+         'q':       0.1
          }
 
 # WEIGHTS
 WEIGHTS = {'a':          2.00,
-           'q':         10.00,
            'b':        100.00,
+           't':          1.00,
+           'h':          1.00,
            'eig_i':      0.00, # Weight of 1st eigenvalue.
            'eig_d':      0.10, # Weight of other eigenvalues.
            'eig_o':      0.05, # Weight of off diagonals in eigenmatrix.
-           'e':         50.00,
-           'eo':        50.00,
-           'ea':        50.00,
-           'eao':       50.00,
-           't':          1.00
+           'e':         20.00,
+           'eo':       100.00,
+           'ea':        20.00,
+           'eao':      100.00,
+           'q':         10.00,
+           'qh':        10.00,
+           'qa':        10.00
            }
 
 # UNIT CONVERSIONS
@@ -131,7 +134,7 @@ RE_SMILES = '[\w\-\=\(\)\.\+\[\]\*]+'
 # Possible symbols used to split atoms in SMARTS notation.
 RE_SPLIT_ATOMS = '[\s\-\(\)\=\.\[\]\*]+'
 # Name of MM3* substructures.
-RE_SUB = '[\w\s\-\.]+'
+RE_SUB = '[\w\s\-\.\*\(\)\%\=\,]+'
 
 # .MMO RELATED
 # Match bonds in lines of a .mmo file.
