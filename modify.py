@@ -149,14 +149,19 @@ def plot(args):
     if opts.job == 'plot':
         plt.plot(rval, cval, 'bo', xl, yl, 'k-')
         total_score = float(bottom[4][1])
+        if intercept >= 0:
+            sign = '+'
+        else:
+            intercept = abs(intercept)
+            sign = '-'
     # Annotate graph based on the type of plot wanted. Angles, bonds, etc. 
     # will give different annotations. User may have to change if statements
     # depending on what they name their files.
         if 'angles' in name:
             plt.xlabel('QM Bond Angles [o]')
             plt.ylabel('MM Bond Angles [o]')
-            plt.annotate('y = %.3f x + %.3f\n$R^2$ = %.3f\nScore = %f'
-                         % (slope, intercept, Rsqr, total_score),
+            plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
+                         % (slope, sign, intercept, Rsqr, total_score),
                          xy = (100, 100),
                          xycoords = 'data',
                          xytext = (60, 140),
@@ -165,8 +170,8 @@ def plot(args):
         elif 'bonds' in name:
             plt.xlabel('QM Bonds Lengths [A]')
             plt.ylabel('MM Bonds Lengths [A]')
-            plt.annotate('y = %.3f x + %.3f\n$R^2$ = %.3f\nScore = %f'
-                         % (slope, intercept, Rsqr, total_score),
+            plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
+                         % (slope, sign, intercept, Rsqr, total_score),
                          xy = (1.0, 1.0),
                          xycoords = 'data',
                          xytext = (1.2, 1.7),
@@ -175,8 +180,8 @@ def plot(args):
         elif 'eigs' in name:
             plt.xlabel('QM Eigenvalues [Some Units]')
             plt.ylabel('MM Eigenvalues [Some Units]')
-            plt.annotate('y = %.3f x + %.3f\n$R^2$ = %.3f\nScore = %f'
-                         % (slope, intercept, Rsqr, total_score),
+            plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
+                         % (slope, sign, intercept, Rsqr, total_score),
                          xy = (1000, 1000),
                          xycoords = 'data',
                          xytext = (1000, 10000),
@@ -185,8 +190,8 @@ def plot(args):
         elif 'tors' in name or 'torsions' in name:
             plt.xlabel('QM Torsions [Some Units]')
             plt.ylabel('MM Torsions [Some Units]')
-            plt.annotate('y = %.3f x + %.3f\n$R^2$ = %.3f\nScore = %f'
-                         % (slope, intercept, Rsqr, total_score),
+            plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
+                         % (slope, sign, intercept, Rsqr, total_score),
                          xy = (100, 100),
                          xycoords = 'data',
                          xytext = (-150, 50),
@@ -195,8 +200,8 @@ def plot(args):
         elif 'charges' in name:
             plt.xlabel('QM Charges [e?]')
             plt.ylabel('MM Charges [e?]')
-            plt.annotate('y = %.3f x + %.3f\n$R^2$ = %.3f\nScore = %f'
-                         % (slope, intercept, Rsqr, total_score),
+            plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
+                         % (slope, sign, intercept, Rsqr, total_score),
                          xy = (0, 0),
                          xycoords = 'data',
                          xytext = (-0.9, 0.4),
