@@ -158,8 +158,8 @@ def plot(args):
     # will give different annotations. User may have to change if statements
     # depending on what they name their files.
         if 'angles' in name:
-            plt.xlabel('QM Bond Angles [o]')
-            plt.ylabel('MM Bond Angles [o]')
+            plt.xlabel('QM Bond Angles [$^\circ$]')
+            plt.ylabel('MM Bond Angles [$^\circ$]')
             plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
                          % (slope, sign, intercept, Rsqr, total_score),
                          xy = (100, 100),
@@ -168,8 +168,8 @@ def plot(args):
                          textcoords = 'data',
                          )
         elif 'bonds' in name:
-            plt.xlabel('QM Bonds Lengths [A]')
-            plt.ylabel('MM Bonds Lengths [A]')
+            plt.xlabel('QM Bonds Lengths [$\AA$]')
+            plt.ylabel('MM Bonds Lengths [$\AA$]')
             plt.annotate('y = %.3f x %s %.3f\n$R^2$ = %.3f\nScore = %f'
                          % (slope, sign, intercept, Rsqr, total_score),
                          xy = (1.0, 1.0),
